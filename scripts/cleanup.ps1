@@ -3,39 +3,55 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "=== AWS Enterprise VPC Cleanup ===" -ForegroundColor Red
 
+$terraformDir = Join-Path $PSScriptRoot "..\terraform"
+$terraformDir = [System.IO.Path]::GetFullPath($terraformDir)
+
+if (-not (Test-Path (Join-Path $terraformDir "main.tf"))) {
+    throw "Terraform directory or main.tf not found: $terraformDir"
+}
+
+$planFile = "cleanup.tfplan"
+
 Write-Host "`nWARNING: This operation can destroy AWS resources." -ForegroundColor Yellow
 
-$confirmation = Read-Host "Type DESTROY to review the Terraform destroy plan"
+$confirmation = Read-Host "Type DESTROY to generate a destruction plan"
 
 if ($confirmation -cne "DESTROY") {
-    Write-Host "Cleanup cancelled. No resources were changed." -ForegroundColor Green
-    exit 0
+    Write-Host "Cleanup cancelled. No resources changed." -ForegroundColor Green
+    return
 }
 
-Write-Host "`nGenerating destruction plan..." -ForegroundColor Yellow
+Push-Location $terraformDir
 
-terraform -chdir=terraform plan -destroy -out=cleanup.tfplan
+try {
+    Write-Host "`nGenerating destruction plan..." -ForegroundColor Yellow
 
-if ($LASTEXITCODE -ne 0) {
-    throw "Terraform destroy plan failed."
+    terraform plan -destroy -out=$planFile
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Terraform destroy plan failed."
+    }
+
+    Write-Host "`nReview the plan carefully." -ForegroundColor Red
+
+    $finalConfirmation = Read-Host "Type APPLY-DESTROY to execute the plan"
+
+    if ($finalConfirmation -cne "APPLY-DESTROY") {
+        Remove-Item $planFile -ErrorAction SilentlyContinue
+        Write-Host "Destruction cancelled. Infrastructure unchanged." -ForegroundColor Green
+        return
+    }
+
+    terraform apply $planFile
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Terraform destroy operation failed."
+    }
+
+    Remove-Item $planFile -ErrorAction SilentlyContinue
+
+    Write-Host "`nCleanup completed successfully." -ForegroundColor Green
 }
-
-Write-Host "`nReview the plan carefully before continuing." -ForegroundColor Red
-
-$finalConfirmation = Read-Host "Type APPLY-DESTROY to execute the destruction plan"
-
-if ($finalConfirmation -cne "APPLY-DESTROY") {
-    Remove-Item terraform/cleanup.tfplan -ErrorAction SilentlyContinue
-    Write-Host "Destruction cancelled. Infrastructure remains unchanged." -ForegroundColor Green
-    exit 0
+finally {
+    Pop-Location
 }
-
-terraform -chdir=terraform apply cleanup.tfplan
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Terraform destroy operation failed."
-}
-
-Remove-Item terraform/cleanup.tfplan -ErrorAction SilentlyContinue
-
-Write-Host "`nCleanup completed." -ForegroundColor Green
